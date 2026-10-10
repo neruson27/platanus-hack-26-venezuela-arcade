@@ -58,6 +58,9 @@ window.addEventListener('keyup', (e) => {
 const FB = ['P1_1', 'P1_2', 'P1_3', 'P1_4', 'P1_5', 'P1_6', 'P2_1', 'P2_2', 'P2_3', 'P2_4', 'P2_5', 'P2_6'];
 const ax = (k) => hit['P1_' + k] || hit['P2_' + k];
 const anyBtn = () => FB.some((b) => hit[b]) || hit.START1 || hit.START2;
+// Con la pantalla volteada, la palanca y los botones del jugador también se leen al revés
+const FM = { U: 'D', D: 'U', L: 'R', R: 'L' };
+const pk = (c) => G.P + (G.fp ? FM[c] || 7 - c : c);
 
 // Cochinos: rosado, azul, dorado, arcoíris
 const PV = [1, 3, 10, 30];
@@ -109,6 +112,7 @@ let G; // mundo activo: río, excavadora y marcador de un jugador
 let L; // niveles de mejoras del mundo activo
 let WS = []; // mundos (1, o 2 en duelo)
 let MODE = 0; // 0 título, 1 un jugador, 2 duelo
+let FL = 0; // duelo en teléfono: la mitad del jugador 2 se ve volteada, él juega desde el otro lado
 let GP = 'title'; // fase global: title, lore, play, pause, end
 let TC, BT, LC, LX, LH, LT, LI, PZ; // título, récords, historia y pausa
 let AC; // audio context
@@ -565,6 +569,7 @@ function mkWorld(i, n) {
     cards: [],
     L: {},
     P: i ? 'P2_' : 'P1_', // prefijo de sus controles
+    fp: i && FL,
     a,
     b,
     x0,
@@ -659,6 +664,8 @@ function create() {
   AC = this.sound.context;
   mkTex();
   mkFx();
+  // En un teléfono en vertical los controles del jugador 2 quedan arriba de la pantalla
+  FL = MODE > 1 && matchMedia('(pointer:coarse)').matches && screen.height > screen.width;
   WS = MODE > 1 ? [mkWorld(0, 2), mkWorld(1, 2)] : [mkWorld(0, 1)];
 
   if (!loaded) {
@@ -782,11 +789,11 @@ function update(time, d) {
   } else if (GP === 'play') {
     if (st) {
       GP = 'pause';
-      PZ = T(400, 300, 'PAUSA', 70, '#ffd23f').setDepth(70);
+      PZ = (FL ? WS : [0]).map((w) => T(w ? w.x0 + 200 : 400, 300, 'PAUSA', 70, '#ffd23f').setDepth(70));
     }
   } else if (GP === 'pause') {
     if (st) {
-      PZ.destroy();
+      PZ.forEach((t) => t.destroy());
       GP = 'play';
     }
   } else {
@@ -875,6 +882,8 @@ function begin() {
   sc.tweens.killTweensOf(LC.list);
   LC.destroy();
   GP = 'play';
+  // Una segunda cámara girada 180° pinta la mitad del jugador 2 encima de la normal
+  if (FL) sc.cameras.add(400, 0, 400, H).setScroll(400, 0).setRotation(Math.PI);
   for (const w of WS) {
     use(w);
     // El río de adorno se limpia para empezar parejo
@@ -940,8 +949,7 @@ function ownUI() {
 // --- Jugador y garras ---
 
 function player(dt) {
-  const p = G.P;
-  const k = (c) => (held[p + c] ? 1 : 0);
+  const k = (c) => (held[pk(c)] ? 1 : 0);
   let mx = k('R') - k('L');
   let my = k('D') - k('U');
   // Garra estilo Isaac: cada botón dispara hacia un lado (2=arriba, 4=izq, 5=abajo, 6=der)
@@ -981,8 +989,8 @@ function player(dt) {
     G.fy = sy / n;
     if (!G.cl.length && G.cd <= 0) fire();
   }
-  if (hit[p + 1] && G.bm > 0) throwBomb();
-  if (hit[p + 3] && G.it) useItem();
+  if (hit[pk(1)] && G.bm > 0) throwBomb();
+  if (hit[pk(3)] && G.it) useItem();
   raft.setPosition(G.x, G.y);
   ex.setPosition(G.x, G.y);
   ex.rotation = Phaser.Math.Angle.RotateTo(ex.rotation, Math.atan2(G.fy, G.fx), 14 * dt);
@@ -1430,7 +1438,7 @@ function lvl(time) {
   if (!G.rdy) return;
   const p = G.P;
   const n = G.cards.length;
-  const d = (hit[p + 'R'] ? 1 : 0) - (hit[p + 'L'] ? 1 : 0);
+  const d = (hit[pk('R')] ? 1 : 0) - (hit[pk('L')] ? 1 : 0);
   if (d) {
     G.sel = (G.sel + d + n) % n;
     tone(700, 0.04, 'square', 0.06);
@@ -1546,16 +1554,24 @@ function finish(msg, mc) {
   GP = 'end';
   WS[0].w = 1.5;
   WS[0].q = 0;
-  sc.add.rectangle(400, 320, 600, 230, 0x061018, 0.94).setStrokeStyle(5, col).setDepth(60);
-  const t = T(400, 262, win < 0 ? '¡EMPATE!' : '¡GANA EL JUGADOR ' + (win + 1) + '!', 44, css(col)).setDepth(61);
-  T(240, 330, 'JUGADOR 1\n' + a, 26, css(WS[0].col)).setDepth(61);
-  T(560, 330, 'JUGADOR 2\n' + b, 26, css(WS[1].col)).setDepth(61);
-  T(400, 330, 'VS', 22).setDepth(61);
-  const s = T(400, 402, 'PRESIONA START', 22).setDepth(61);
-  sc.tweens.add({ targets: t, scale: 1.1, duration: 400, yoyo: true, repeat: -1, ease: 'Sine.easeInOut' });
-  sc.tweens.add({ targets: s, alpha: 0.2, duration: 500, yoyo: true, repeat: -1 });
   P.cf.setParticleTint(col);
-  P.cf.emitParticleAt(400, 262, 60);
+  // Con la pantalla volteada cada jugador ve el resultado en su mitad, de su lado
+  for (const w of FL ? WS : [0]) {
+    const c = sc.add.container(w ? w.x0 + 200 : 400, 320).setDepth(60).setScale(w ? 0.62 : 1);
+    const t = T(0, -58, win < 0 ? '¡EMPATE!' : '¡GANA EL JUGADOR ' + (win + 1) + '!', 44, css(col));
+    const s = T(0, 82, 'PRESIONA START', 22);
+    c.add([
+      sc.add.rectangle(0, 0, 600, 230, 0x061018, 0.94).setStrokeStyle(5, col),
+      t,
+      T(-160, 10, 'JUGADOR 1\n' + a, 26, css(WS[0].col)),
+      T(160, 10, 'JUGADOR 2\n' + b, 26, css(WS[1].col)),
+      T(0, 10, 'VS', 22),
+      s,
+    ]);
+    sc.tweens.add({ targets: t, scale: 1.1, duration: 400, yoyo: true, repeat: -1, ease: 'Sine.easeInOut' });
+    sc.tweens.add({ targets: s, alpha: 0.2, duration: 500, yoyo: true, repeat: -1 });
+    P.cf.emitParticleAt(c.x, 262, 60);
+  }
   [523, 659, 784, 1047, 1319].forEach((f, i) => tone(f, 0.25, 'triangle', 0.12, 0, i * 0.1));
 }
 

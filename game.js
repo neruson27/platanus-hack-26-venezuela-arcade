@@ -3,8 +3,10 @@
 
 const W = 800;
 const H = 600;
-const RL = 90; // orilla izquierda del río
-const RR = 710; // orilla derecha del río
+// Orillas y centro del río del mundo activo (cambian con cada jugador, ver use())
+let RL = 90;
+let RR = 710;
+let CX = 400;
 const KEY = 'cochinos-orinoco-hs';
 
 // DO NOT replace existing keys — they match the physical arcade cabinet wiring.
@@ -99,9 +101,16 @@ const LORE =
 const MAXLV = 24; // nivel 25 en pantalla
 const FURY = 19; // desde el nivel 20 los caimanes se enfurecen
 
+const LORE2 =
+  '\n\nPero no eras la única excavadora en el camino... ¡A ver quién rescata más!';
+
 let sc; // escena
-let G; // estado de la partida
-let L; // niveles de mejoras
+let G; // mundo activo: río, excavadora y marcador de un jugador
+let L; // niveles de mejoras del mundo activo
+let WS = []; // mundos (1, o 2 en duelo)
+let MODE = 0; // 0 título, 1 un jugador, 2 duelo
+let GP = 'title'; // fase global: title, lore, play, pause, end
+let TC, BT, LC, LX, LH, LT, LI, PZ; // título, récords, historia y pausa
 let AC; // audio context
 let best = [];
 let loaded = 0;
@@ -308,7 +317,7 @@ function mkFx() {
     .setDepth(9);
   sc.add
     .particles(0, 0, 'dot', {
-      x: { min: RL, max: RR },
+      x: { min: 0, max: W },
       y: { min: 50, max: H },
       speedY: 70,
       lifespan: 700,
@@ -414,17 +423,22 @@ function mkTex() {
     g.fillStyle(0x6b421c).fillRect(17, 3, 2, 58).fillRect(31, 3, 2, 58).fillRect(45, 3, 2, 58);
   });
 
-  // Excavadora mirando a la derecha
-  tx('ex', 50, 40, () => {
-    g.fillStyle(0x222222).fillRoundedRect(2, 1, 36, 10, 4).fillRoundedRect(2, 29, 36, 10, 4);
-    g.fillStyle(0x555555).fillRect(6, 4, 4, 4).fillRect(16, 4, 4, 4).fillRect(26, 4, 4, 4);
-    g.fillRect(6, 32, 4, 4).fillRect(16, 32, 4, 4).fillRect(26, 32, 4, 4);
-    g.fillStyle(0xffc21a).fillRoundedRect(6, 7, 30, 26, 5);
-    g.fillStyle(0xd99a00).fillRect(34, 16, 14, 8).fillRect(8, 9, 8, 22);
-    g.fillStyle(0x1d3442).fillRect(19, 10, 13, 12);
-    g.fillStyle(0x9fe0ff).fillRect(21, 12, 9, 8);
-    g.fillStyle(0x333333).fillCircle(12, 27, 3);
-  });
+  // Excavadora mirando a la derecha: amarilla (jugador 1) y azul (jugador 2)
+  [
+    ['ex', 0xffc21a, 0xd99a00],
+    ['ex2', 0x4fc3ff, 0x2b8fd0],
+  ].forEach(([k, c1, c2]) =>
+    tx(k, 50, 40, () => {
+      g.fillStyle(0x222222).fillRoundedRect(2, 1, 36, 10, 4).fillRoundedRect(2, 29, 36, 10, 4);
+      g.fillStyle(0x555555).fillRect(6, 4, 4, 4).fillRect(16, 4, 4, 4).fillRect(26, 4, 4, 4);
+      g.fillRect(6, 32, 4, 4).fillRect(16, 32, 4, 4).fillRect(26, 32, 4, 4);
+      g.fillStyle(c1).fillRoundedRect(6, 7, 30, 26, 5);
+      g.fillStyle(c2).fillRect(34, 16, 14, 8).fillRect(8, 9, 8, 22);
+      g.fillStyle(0x1d3442).fillRect(19, 10, 13, 12);
+      g.fillStyle(0x9fe0ff).fillRect(21, 12, 9, 8);
+      g.fillStyle(0x333333).fillCircle(12, 27, 3);
+    }),
+  );
 
   tx('claw', 32, 30, () => {
     g.fillStyle(0xe6edf1).fillTriangle(4, 10, 30, 2, 20, 13).fillTriangle(4, 20, 30, 28, 20, 17);
@@ -489,22 +503,37 @@ function mkTex() {
   g.destroy();
 }
 
-// --- Escena ---
+// --- Mundos: cada jugador tiene su propio río (pantalla partida en duelo) ---
 
-function create() {
-  sc = this;
-  AC = this.sound.context;
-  mkTex();
-  mkFx();
+// Apunta los globales al mundo de un jugador; toda la lógica trabaja sobre el mundo activo
+function use(w) {
+  G = w;
+  L = w.L;
+  RL = w.a;
+  RR = w.b;
+  CX = (RL + RR) / 2;
+  ({ water, raft, ex, gfx, tS, tL, xpBar, tC, cBar, tN, tB, tI, iI, hearts } = w.o);
+}
 
-  L = {};
-  for (const u of UP) L[u[0]] = 0;
+const two = () => WS.length > 1;
+// En duelo no se sacude ni destella la pantalla entera: molestaría al otro jugador
+const shk = (d, i) => two() || sc.cameras.main.shake(d, i);
+const fls = (d, r, g, b) => two() || sc.cameras.main.flash(d, r, g, b);
 
-  G = {
-    ph: 'title',
+function mkWorld(i, n) {
+  const duo = n > 1;
+  const vw = W / n;
+  const x0 = i * vw;
+  const bk = duo ? 20 : 90;
+  const a = x0 + bk;
+  const b = x0 + vw - bk;
+  const cx = x0 + vw / 2;
+  const w = {
+    ph: 'demo',
     T: 0, // tiempo total (animaciones)
     t: 0, // tiempo de partida
-    x: 400,
+    tm: 180, // reloj del duelo
+    x: cx,
     y: 430,
     fx: 0,
     fy: -1,
@@ -534,63 +563,133 @@ function create() {
     ca: [],
     cl: [],
     cards: [],
+    L: {},
+    P: i ? 'P2_' : 'P1_', // prefijo de sus controles
+    a,
+    b,
+    x0,
+    vw,
+    ks: duo ? 0.56 : 1, // escala de cartas y avisos
+    yb: duo ? H - 64 : H - 34,
+    col: i ? 0x4fc3ff : 0xffc21a,
   };
+  for (const u of UP) w.L[u[0]] = 0;
+  const o = (w.o = {});
 
-  water = this.add.tileSprite(400, 300, RR - RL, H, 'w');
+  o.water = sc.add.tileSprite(cx, 300, b - a, H, 'w');
 
   // Orillas con selva
-  const b = this.add.graphics().setDepth(1);
+  const g = sc.add.graphics().setDepth(1);
+  const sd = duo ? 5 : 8;
   for (const s of [0, 1]) {
-    const x0 = s ? RR : 0;
-    b.fillStyle(0x2c6b2a).fillRect(x0, 0, 90, H);
-    b.fillStyle(0xcaa75a).fillRect(s ? RR : RL - 8, 0, 8, H);
-    for (let i = 0; i < 46; i++) {
-      b.fillStyle([0x1f5220, 0x3a8a35, 0x2f7a2e, 0x4a9e3f][i % 4], 0.9);
-      b.fillCircle(x0 + (s ? rnd(14, 90) : rnd(0, 76)), rnd(0, H), rnd(9, 20));
+    const bx = s ? b : x0;
+    g.fillStyle(0x2c6b2a).fillRect(bx, 0, bk, H);
+    g.fillStyle(0xcaa75a).fillRect(s ? b : a - sd, 0, sd, H);
+    for (let j = 0; j < (duo ? 24 : 46); j++) {
+      g.fillStyle([0x1f5220, 0x3a8a35, 0x2f7a2e, 0x4a9e3f][j % 4], 0.9);
+      g.fillCircle(bx + (s ? rnd(sd + 6, bk) : rnd(0, bk - sd - 6)), rnd(0, H), duo ? rnd(6, 11) : rnd(9, 20));
     }
   }
 
-  raft = this.add.image(G.x, G.y, 'raft').setDepth(4);
-  gfx = this.add.graphics().setDepth(5);
-  ex = this.add.image(G.x, G.y, 'ex').setDepth(6).setRotation(-Math.PI / 2);
-  raft.setVisible(false);
-  ex.setVisible(false);
+  o.raft = sc.add.image(cx, 430, 'raft').setDepth(4).setVisible(false);
+  o.gfx = sc.add.graphics().setDepth(5);
+  o.ex = sc.add
+    .image(cx, 430, i ? 'ex2' : 'ex')
+    .setDepth(6)
+    .setRotation(-Math.PI / 2)
+    .setVisible(false);
 
   // HUD (oculto hasta que empieza la partida)
-  const n0 = this.children.list.length;
-  this.add.rectangle(400, 25, W, 50, 0x061018, 0.75).setDepth(20);
-  tS = T(16, 25, '0', 30, '#ffd23f').setOrigin(0, 0.5).setDepth(21);
-  this.add.rectangle(400, 17, 304, 16, 0x12222e).setStrokeStyle(2, 0x3d93b0).setDepth(21);
-  xpBar = this.add.rectangle(250, 17, 300, 10, 0x9be36b).setOrigin(0, 0.5).setDepth(21);
-  tL = T(400, 38, '', 13).setDepth(21);
-  hearts = [];
-  for (let i = 0; i < 6; i++) hearts.push(this.add.image(782 - i * 24, 25, 'heart').setDepth(21));
+  const n0 = sc.children.list.length;
+  const D = (ob) => ob.setDepth(21);
+  const R = (x, y, ww, hh, c, al) => D(sc.add.rectangle(x, y, ww, hh, c, al));
+  o.hearts = [];
+  if (duo) {
+    // Compacto: marcador arriba y recursos en una franja abajo
+    sc.add.rectangle(cx, 25, vw, 50, 0x061018, 0.75).setDepth(20);
+    sc.add.rectangle(cx, 582, vw, 36, 0x061018, 0.75).setDepth(20);
+    o.tS = D(T(x0 + 12, 18, '0', 24, css(w.col)).setOrigin(0, 0.5));
+    R(cx, 43, 384, 8, 0x12222e);
+    o.xpBar = R(x0 + 10, 43, 380, 4, 0x9be36b).setOrigin(0, 0.5);
+    o.tL = D(T(cx, 20, '', 13));
+    for (let j = 0; j < 6; j++) o.hearts.push(D(sc.add.image(x0 + 388 - j * 17, 18, 'heart').setScale(0.75)));
+    o.tC = D(T(x0 + 34, 578, 'x1', 22, '#ff8a1f'));
+    R(x0 + 34, 595, 52, 5, 0x12222e);
+    o.cBar = R(x0 + 10, 595, 48, 3, 0xff8a1f).setOrigin(0, 0.5);
+    D(icon('bomb', x0 + 116, 580, 24));
+    o.tB = D(T(x0 + 142, 582, '1', 18));
+    R(x0 + 210, 582, 30, 30, 0x12222e, 0.8).setStrokeStyle(2, 0x3d93b0);
+    o.iI = D(sc.add.image(x0 + 210, 582, 'bolt').setScale(0.8));
+    o.tI = D(T(x0 + 266, 582, '', 11, '#ffe14d'));
+    D(icon('pig', x0 + 338, 582, 24, PC[0]));
+    o.tN = D(T(x0 + 370, 582, '0', 16));
+    w.mk = sc.make.graphics({ add: false }).fillStyle(0xffffff).fillRect(x0, 0, vw, H).createGeometryMask();
+  } else {
+    sc.add.rectangle(400, 25, W, 50, 0x061018, 0.75).setDepth(20);
+    o.tS = D(T(16, 25, '0', 30, '#ffd23f').setOrigin(0, 0.5));
+    R(400, 17, 304, 16, 0x12222e).setStrokeStyle(2, 0x3d93b0);
+    o.xpBar = R(250, 17, 300, 10, 0x9be36b).setOrigin(0, 0.5);
+    o.tL = D(T(400, 38, '', 13));
+    for (let j = 0; j < 6; j++) o.hearts.push(D(sc.add.image(782 - j * 24, 25, 'heart')));
+    D(T(45, 78, 'COMBO', 13, '#cfe8f2'));
+    o.tC = D(T(45, 108, 'x1', 34, '#ff8a1f'));
+    R(45, 134, 64, 8, 0x12222e);
+    o.cBar = R(15, 134, 60, 4, 0xff8a1f).setOrigin(0, 0.5);
+    D(icon('pig', 45, 180, 40, PC[0]));
+    o.tN = D(T(45, 212, '0', 20));
+    D(icon('bomb', 45, 262, 34));
+    o.tB = D(T(45, 292, '1', 20));
+    D(T(45, 336, 'ÍTEM', 13, '#cfe8f2'));
+    R(45, 376, 56, 56, 0x12222e, 0.8).setStrokeStyle(2, 0x3d93b0);
+    o.iI = D(sc.add.image(45, 376, 'bolt').setScale(1.4));
+    o.tI = D(T(45, 416, '', 13, '#ffe14d'));
+    w.ui = D(sc.add.container(0, 0));
+  }
+  w.hu = sc.children.list.slice(n0);
+  use(w);
+  hud();
+  w.hu.forEach((ob) => ob.setVisible(false));
+  return w;
+}
 
-  T(45, 78, 'COMBO', 13, '#cfe8f2').setDepth(21);
-  tC = T(45, 108, 'x1', 34, '#ff8a1f').setDepth(21);
-  this.add.rectangle(45, 134, 64, 8, 0x12222e).setDepth(21);
-  cBar = this.add.rectangle(15, 134, 60, 4, 0xff8a1f).setOrigin(0, 0.5).setDepth(21);
-  icon('pig', 45, 180, 40, PC[0]).setDepth(21);
-  tN = T(45, 212, '0', 20).setDepth(21);
-  icon('bomb', 45, 262, 34).setDepth(21);
-  tB = T(45, 292, '1', 20).setDepth(21);
-  T(45, 336, 'ÍTEM', 13, '#cfe8f2').setDepth(21);
-  this.add.rectangle(45, 376, 56, 56, 0x12222e, 0.8).setStrokeStyle(2, 0x3d93b0).setDepth(21);
-  iI = this.add.image(45, 376, 'bolt').setScale(1.4).setDepth(21);
-  tI = T(45, 416, '', 13, '#ffe14d').setDepth(21);
-  G.ui = this.add.container(0, 0).setDepth(21);
-  G.hu = this.children.list.slice(n0);
+// --- Escena ---
 
-  // Título
-  const c = (G.tc = this.add.container(0, 0).setDepth(30));
-  const sun = rays(this.add.graphics({ x: 400, y: 150 }).setAlpha(0.3));
+function create() {
+  sc = this;
+  AC = this.sound.context;
+  mkTex();
+  mkFx();
+  WS = MODE > 1 ? [mkWorld(0, 2), mkWorld(1, 2)] : [mkWorld(0, 1)];
+
+  if (!loaded) {
+    loaded = 1;
+    store()
+      .get(KEY)
+      .then((r) => {
+        if (r && r.found && Array.isArray(r.value)) {
+          best = r.value
+            .filter((e) => e && typeof e.n === 'string' && typeof e.s === 'number')
+            .slice(0, 5);
+          if (BT && BT.active) BT.setText(bestStr());
+        }
+      })
+      .catch(() => {});
+  }
+  if (MODE) lore();
+  else title();
+}
+
+function title() {
+  GP = 'title';
+  const c = (TC = sc.add.container(0, 0).setDepth(30));
+  const sun = rays(sc.add.graphics({ x: 400, y: 150 }).setAlpha(0.3));
   c.add(sun);
-  this.tweens.add({ targets: sun, angle: 360, duration: 24000, repeat: -1 });
+  sc.tweens.add({ targets: sun, angle: 360, duration: 24000, repeat: -1 });
   // Letras que saltan en ola
   'COCHINOS'.split('').forEach((ch, i) => {
     const t = T(400 + (i - 3.5) * 56, 128, ch, 96, i % 2 ? '#ffb8d6' : '#ff8fbd');
     c.add(t);
-    this.tweens.add({
+    sc.tweens.add({
       targets: t,
       y: 106,
       angle: i % 2 ? 6 : -6,
@@ -602,22 +701,24 @@ function create() {
     });
   });
   const t2 = T(400, 212, 'DEL ORINOCO', 48, '#ffd23f');
-  const t3 = T(400, 292, 'PRESIONA START', 30);
+  const t3 = T(400, 278, 'START 1:  UN JUGADOR', 22, '#ffe9a0');
+  const t4 = T(400, 308, 'START 2:  DUELO A PANTALLA PARTIDA', 22, '#9fdcff');
   const don = icon('man', 640, 425, 100);
   const raf = icon('raft', 160, 430, 96);
   const exc = icon('ex', 160, 430, 76).setRotation(-0.5);
-  G.bt = T(400, 566, bestStr(), 15, '#9be36b');
+  BT = T(400, 566, bestStr(), 15, '#9be36b');
   c.add([
     t2,
-    this.add.rectangle(400, 292, 330, 48, 0x061018, 0.75).setStrokeStyle(3, 0xffd23f),
+    sc.add.rectangle(400, 293, 520, 74, 0x061018, 0.78).setStrokeStyle(3, 0xffd23f),
     t3,
+    t4,
     raf,
     exc,
     don,
     T(640, 490, 'Don Chucho', 13, '#cfe8f2'),
     T(400, 352, 'PALANCA: mover la gabarra', 15, '#cfe8f2'),
     T(400, 512, 'Las bombas matan caimanes. Los ítems bajan por el río.', 13, '#cfe8f2'),
-    G.bt,
+    BT,
   ]);
   ['BOMBA', '↑', 'ÍTEM', '←', '↓', '→'].forEach((s, i) => {
     const x = 310 + (i % 3) * 90;
@@ -628,13 +729,13 @@ function create() {
     ]);
   });
   c.add(T(400, 488, '↑ ← ↓ →  lanzan la garra en esa dirección', 13, '#cfe8f2'));
-  this.tweens.add({ targets: t2, scale: 1.08, duration: 700, yoyo: true, repeat: -1, ease: 'Sine.easeInOut' });
-  this.tweens.add({ targets: t3, scale: 1.12, duration: 420, yoyo: true, repeat: -1, ease: 'Sine.easeInOut' });
-  this.tweens.add({ targets: don, angle: 8, y: 418, duration: 380, yoyo: true, repeat: -1 });
-  this.tweens.add({ targets: [raf, exc], y: 438, duration: 900, yoyo: true, repeat: -1, ease: 'Sine.easeInOut' });
-  this.tweens.add({ targets: exc, rotation: -1.1, duration: 1300, yoyo: true, repeat: -1, ease: 'Sine.easeInOut' });
+  sc.tweens.add({ targets: t2, scale: 1.08, duration: 700, yoyo: true, repeat: -1, ease: 'Sine.easeInOut' });
+  sc.tweens.add({ targets: [t3, t4], scale: 1.07, duration: 420, yoyo: true, repeat: -1, ease: 'Sine.easeInOut' });
+  sc.tweens.add({ targets: don, angle: 8, y: 418, duration: 380, yoyo: true, repeat: -1 });
+  sc.tweens.add({ targets: [raf, exc], y: 438, duration: 900, yoyo: true, repeat: -1, ease: 'Sine.easeInOut' });
+  sc.tweens.add({ targets: exc, rotation: -1.1, duration: 1300, yoyo: true, repeat: -1, ease: 'Sine.easeInOut' });
   // Brillitos alrededor del título
-  G.te = this.add
+  sc.add
     .particles(0, 0, 'dot', {
       x: { min: 150, max: 650 },
       y: { min: 60, max: 245 },
@@ -646,82 +747,87 @@ function create() {
       blendMode: 'ADD',
     })
     .setDepth(31);
+}
 
-  if (!loaded) {
-    loaded = 1;
-    store()
-      .get(KEY)
-      .then((r) => {
-        if (r && r.found && Array.isArray(r.value)) {
-          best = r.value
-            .filter((e) => e && typeof e.n === 'string' && typeof e.s === 'number')
-            .slice(0, 5);
-          if (G.bt && G.bt.active) G.bt.setText(bestStr());
-        }
-      })
-      .catch(() => {});
-  }
-  hud();
-  G.hu.forEach((o) => o.setVisible(false));
+function restart(mode) {
+  MODE = mode;
+  for (const k in hit) delete hit[k];
+  sc.scene.restart();
 }
 
 function update(time, d) {
   const dt = Math.min(d, 50) / 1000;
+  const st = hit.START1 || hit.START2;
+  music();
+
+  if (GP === 'title') {
+    // START 2 (o cualquier botón del jugador 2) arranca el duelo
+    const n = hit.START2 || FB.slice(6).some((b) => hit[b]) ? 2 : anyBtn() ? 1 : 0;
+    if (n) return restart(n);
+  } else if (GP === 'lore') {
+    const n = LT.length;
+    const i = LI | 0;
+    if (anyBtn()) {
+      if (i < n) LI = n;
+      else begin();
+    } else if (i < n) {
+      LI += 36 * dt;
+      if ((LI | 0) > i && i % 3 === 0) tone(520 + (i % 5) * 40, 0.03, 'square', 0.025);
+    }
+    if (GP === 'lore') {
+      LX.setText(LT.slice(0, LI | 0));
+      LH.setText(LI < n ? 'BOTÓN: saltar' : 'PRESIONA UN BOTÓN PARA EMPEZAR');
+      LH.setAlpha(LI < n ? 0.6 : 0.6 + 0.4 * Math.sin(time / 120));
+    }
+  } else if (GP === 'play') {
+    if (st) {
+      GP = 'pause';
+      PZ = T(400, 300, 'PAUSA', 70, '#ffd23f').setDepth(70);
+    }
+  } else if (GP === 'pause') {
+    if (st) {
+      PZ.destroy();
+      GP = 'play';
+    }
+  } else {
+    use(WS[0]);
+    if (overInput(dt)) return;
+  }
+
+  if (GP !== 'pause') {
+    for (const w of WS) {
+      use(w);
+      step(dt, time);
+    }
+  }
+  for (const k in hit) delete hit[k];
+}
+
+// Avanza el mundo activo
+function step(dt, time) {
   const ph = G.ph;
   G.T += dt;
   G.sn = 0;
-  music();
-  if (ph !== 'lvl' && ph !== 'pause') water.tilePositionY -= 70 * dt;
-
-  if (ph === 'title') {
-    river(dt);
-    if (anyBtn()) lore();
-  } else if (ph === 'lore') {
-    river(dt);
-    const n = LORE.length;
-    const i = G.li | 0;
-    if (anyBtn()) {
-      if (i < n) G.li = n;
-      else begin();
-    } else if (i < n) {
-      G.li += 36 * dt;
-      if ((G.li | 0) > i && i % 3 === 0) tone(520 + (i % 5) * 40, 0.03, 'square', 0.025);
-    }
-    if (G.ph === 'lore') {
-      G.lx.setText(LORE.slice(0, G.li | 0));
-      G.lh.setText(G.li < n ? 'BOTÓN: saltar' : 'PRESIONA UN BOTÓN PARA EMPEZAR');
-      G.lh.setAlpha(G.li < n ? 0.6 : 0.6 + 0.4 * Math.sin(time / 120));
-    }
-  } else if (ph === 'play') {
-    G.t += dt;
-    player(dt);
-    river(dt);
-    claws(dt);
-    if (G.cb && (G.ct -= dt) <= 0) {
-      G.cb = 0;
-      G.hd = 1;
-    }
-    cBar.scaleX = G.cb ? clamp(G.ct / (2.5 + 1.5 * L.c), 0, 1) : 0;
-    if (G.hd) hud();
-    if (G.ph === 'play') {
-      if (G.xp >= G.need && G.lv < MAXLV) levelUp();
-      else if (hit.START1 || hit.START2) {
-        G.ph = 'pause';
-        G.pz = T(400, 300, 'PAUSA', 70, '#ffd23f').setDepth(60);
-      }
-    }
-  } else if (ph === 'lvl') lvl(time);
-  else if (ph === 'pause') {
-    if (hit.START1 || hit.START2) {
-      G.pz.destroy();
-      G.ph = 'play';
-    }
-  } else if (ph === 'over') {
-    river(dt);
-    overInput(dt);
+  if (ph === 'lvl') return lvl(time);
+  water.tilePositionY -= 70 * dt;
+  if (ph !== 'play') return river(dt);
+  G.t += dt;
+  if (two()) {
+    const s = Math.ceil(G.tm);
+    G.tm -= dt;
+    if (Math.ceil(G.tm) < s) G.hd = 1;
+    if (G.tm <= 0) return finish('¡TIEMPO!', '#ffd23f');
   }
-
-  for (const k in hit) delete hit[k];
+  player(dt);
+  river(dt);
+  claws(dt);
+  if (G.cb && (G.ct -= dt) <= 0) {
+    G.cb = 0;
+    G.hd = 1;
+  }
+  cBar.scaleX = G.cb ? clamp(G.ct / (2.5 + 1.5 * L.c), 0, 1) : 0;
+  if (G.hd) hud();
+  if (G.ph === 'play' && G.xp >= G.need && G.lv < MAXLV) levelUp();
 }
 
 function rays(g) {
@@ -735,26 +841,29 @@ function rays(g) {
 
 // Historia que se escribe sola antes de cada partida
 function lore() {
-  sc.tweens.killTweensOf(G.tc.list);
-  G.tc.destroy();
-  G.te.destroy();
-  G.ph = 'lore';
-  G.li = 0;
+  GP = 'lore';
+  LI = 0;
+  LT = LORE + (two() ? LORE2 : '');
   tone(520, 0.1, 'square', 0.1, 1040);
-  const c = (G.lc = sc.add.container(0, 0).setDepth(40));
-  const don = icon('man', 130, 130, 110);
-  const pigs = [0, 1, 2].map((i) => icon('pig', 290 + i * 95, 120 + (i % 2) * 30, 50, PC[0]));
-  G.lx = T(105, 212, '', 17, '#f4f7fa').setOrigin(0).setAlign('left').setWordWrapWidth(600).setLineSpacing(3);
-  G.lh = T(400, 574, '', 15, '#ffd23f');
+  const c = (LC = sc.add.container(0, 0).setDepth(40));
+  // En duelo el texto es más largo: la ilustración se achica para que quepa
+  const d = two();
+  const k = d ? 0.66 : 1;
+  const y = d ? 108 : 130;
+  const don = icon('man', 130, y, 110 * k);
+  const pigs = [0, 1, 2].map((i) => icon('pig', 290 + i * 95, y - 10 + (i % 2) * 30 * k, 50 * k, PC[0]));
+  LX = T(105, d ? 158 : 205, '', 17, '#f4f7fa').setOrigin(0).setAlign('left').setWordWrapWidth(600).setLineSpacing(3);
+  LH = T(400, 578, '', 15, '#ffd23f');
   c.add([
     sc.add.rectangle(400, 300, W, H, 0x061018, 0.88),
-    T(400, 44, 'LA CRECIDA', 40, '#ffd23f'),
+    T(400, 44, two() ? 'LA CRECIDA: DUELO' : 'LA CRECIDA', 40, '#ffd23f'),
     don,
-    icon('raft', 670, 130, 96),
-    icon('ex', 670, 130, 76).setRotation(Math.PI),
-    G.lx,
-    G.lh,
+    icon('raft', 680, y, 96 * k),
+    icon('ex', 680, y, 76 * k).setRotation(Math.PI),
+    LX,
+    LH,
   ]);
+  if (d) c.add([icon('raft', 600, y, 96 * k), icon('ex2', 600, y, 76 * k).setRotation(Math.PI)]);
   c.add(pigs);
   sc.tweens.add({ targets: don, angle: 7, duration: 300, yoyo: true, repeat: -1 });
   pigs.forEach((p, i) =>
@@ -763,25 +872,30 @@ function lore() {
 }
 
 function begin() {
-  sc.tweens.killTweensOf(G.lc.list);
-  G.lc.destroy();
-  // El río de adorno del título se limpia para empezar parejo
-  G.pg.concat(G.ca).forEach((o) => o.destroy());
-  G.pg = [];
-  G.ca = [];
-  G.hu.forEach((o) => o.setVisible(true));
-  raft.setVisible(true);
-  ex.setVisible(true);
-  G.ph = 'play';
-  hud();
+  sc.tweens.killTweensOf(LC.list);
+  LC.destroy();
+  GP = 'play';
+  for (const w of WS) {
+    use(w);
+    // El río de adorno se limpia para empezar parejo
+    G.pg.concat(G.ca).forEach((o) => o.destroy());
+    G.pg = [];
+    G.ca = [];
+    G.hu.forEach((o) => o.setVisible(true));
+    raft.setVisible(true);
+    ex.setVisible(true);
+    G.ph = 'play';
+    hud();
+    if (two()) banner('JUGADOR ' + (w.P === 'P1_' ? 1 : 2) + '\n¡3 minutos!', css(w.col));
+  }
   [523, 659, 784, 1047].forEach((f, i) => tone(f, 0.14, 'square', 0.09, 0, i * 0.08));
 }
 
 function banner(s, col) {
-  const t = T(400, 210, s, 32, col).setDepth(30).setScale(0);
-  sc.tweens.add({ targets: t, scale: 1, duration: 450, ease: 'Back.easeOut' });
+  const t = T(CX, 210, s, 32, col).setDepth(30).setScale(0);
+  sc.tweens.add({ targets: t, scale: G.ks, duration: 450, ease: 'Back.easeOut' });
   sc.tweens.add({ targets: t, alpha: 0, delay: 2800, duration: 500, onComplete: () => t.destroy() });
-  sc.cameras.main.shake(350, 0.012);
+  shk(350, 0.012);
   tone(110, 0.8, 'sawtooth', 0.16, 55);
 }
 
@@ -789,11 +903,17 @@ const mult = () => 1 + Math.min(9, (G.cb / 5) | 0);
 
 function hud() {
   G.hd = 0;
-  if (mult() > G.pm) burst(45, 108, 0xff8a1f, 18, 200);
+  if (mult() > G.pm) burst(tC.x, tC.y, 0xff8a1f, 18, 200);
   G.pm = mult();
   tS.setText(G.score);
   const mx = G.lv >= MAXLV;
-  tL.setText('NIVEL ' + (G.lv + 1) + (mx ? '   ¡MÁXIMO!' : '   ' + G.xp + '/' + G.need + ' cochinos'));
+  const s = Math.max(0, Math.ceil(G.tm));
+  tL.setText(
+    'NIVEL ' +
+      (G.lv + 1) +
+      '   ' +
+      (two() ? ((s / 60) | 0) + ':' + String(s % 60).padStart(2, '0') : mx ? '¡MÁXIMO!' : G.xp + '/' + G.need + ' cochinos'),
+  );
   xpBar.scaleX = mx ? 1 : clamp(G.xp / G.need, 0, 1);
   tC.setText('x' + mult());
   tN.setText(G.n);
@@ -804,7 +924,9 @@ function hud() {
   hearts.forEach((h, i) => h.setVisible(i < 3 + L.l).setTint(i < G.hp ? 0xffffff : 0x333333));
 }
 
+// Lista de mejoras en la orilla derecha (solo cabe en un jugador)
 function ownUI() {
+  if (!G.ui) return;
   G.ui.removeAll(true);
   let y = 78;
   for (const u of UP) {
@@ -818,11 +940,13 @@ function ownUI() {
 // --- Jugador y garras ---
 
 function player(dt) {
-  let mx = (held.P1_R ? 1 : 0) - (held.P1_L ? 1 : 0);
-  let my = (held.P1_D ? 1 : 0) - (held.P1_U ? 1 : 0);
+  const p = G.P;
+  const k = (c) => (held[p + c] ? 1 : 0);
+  let mx = k('R') - k('L');
+  let my = k('D') - k('U');
   // Garra estilo Isaac: cada botón dispara hacia un lado (2=arriba, 4=izq, 5=abajo, 6=der)
-  const sx = (held.P1_6 ? 1 : 0) - (held.P1_4 ? 1 : 0);
-  const sy = (held.P1_5 ? 1 : 0) - (held.P1_2 ? 1 : 0);
+  const sx = k(6) - k(4);
+  const sy = k(5) - k(2);
   const f = sx || sy;
   G.cd -= dt;
   G.inv -= dt;
@@ -834,7 +958,7 @@ function player(dt) {
     mx /= n;
     my /= n;
     G.x = clamp(G.x + mx * s * dt, RL + 32, RR - 32);
-    G.y = clamp(G.y + my * s * dt, 84, H - 34);
+    G.y = clamp(G.y + my * s * dt, 84, G.yb);
     if (!f) {
       G.fx = mx;
       G.fy = my;
@@ -857,8 +981,8 @@ function player(dt) {
     G.fy = sy / n;
     if (!G.cl.length && G.cd <= 0) fire();
   }
-  if (hit.P1_1 && G.bm > 0) throwBomb();
-  if (hit.P1_3 && G.it) useItem();
+  if (hit[p + 1] && G.bm > 0) throwBomb();
+  if (hit[p + 3] && G.it) useItem();
   raft.setPosition(G.x, G.y);
   ex.setPosition(G.x, G.y);
   ex.rotation = Phaser.Math.Angle.RotateTo(ex.rotation, Math.atan2(G.fy, G.fx), 14 * dt);
@@ -866,6 +990,7 @@ function player(dt) {
 }
 
 function throwBomb() {
+  const w = G;
   G.bm--;
   G.hd = 1;
   const x = clamp(G.x + G.fx * 120, RL + 20, RR - 20);
@@ -888,7 +1013,9 @@ function throwBomb() {
     yoyo: true,
     onComplete: () => {
       b.destroy();
-      if (G.ph !== 'over') boom(x, y);
+      // La bomba cae fuera del turno de su mundo: hay que volver a apuntarle
+      use(w);
+      if (w.ph !== 'over') boom(x, y);
     },
   });
 }
@@ -904,7 +1031,7 @@ function useItem() {
   else if (i === 2) G.sh = 7;
   else {
     // Red: se lleva todos los cochinos de la pantalla
-    sc.cameras.main.flash(250, 255, 255, 255);
+    fls(250, 255, 255, 255);
     for (const o of G.pg) {
       if (o.dead || o.k > 3) continue;
       collect(o);
@@ -950,8 +1077,8 @@ function claws(dt) {
     if (x < RL || x > RR || y < 50 || y > H) c.st = 1;
     c.im.setPosition(x, y);
     if (!c.st) P.wk.emitParticleAt(x, y, 1);
-    gfx.lineStyle(7, 0x7a5a00).lineBetween(G.x, G.y, x, y);
-    gfx.lineStyle(3, 0xffc21a).lineBetween(G.x, G.y, x, y);
+    gfx.lineStyle(7, 0x061018).lineBetween(G.x, G.y, x, y);
+    gfx.lineStyle(3, G.col).lineBetween(G.x, G.y, x, y);
 
     if (c.hp > 0) {
       for (const o of G.pg) {
@@ -1047,10 +1174,19 @@ function boom(x, y) {
   P.sp.emitParticleAt(x, y, 26);
   P.rg.emitParticleAt(x, y, 1);
   burst(x, y, 0xffd23f, 20, R);
-  sc.cameras.main.shake(180, 0.012);
+  shk(180, 0.012);
   tone(160, 0.4, 'sawtooth', 0.2, 40);
   for (const c of G.ca) if (Math.hypot(c.x - x, c.y - y) < R + 20) kill(c);
   for (const o of G.pg) if (o.k < 4 && Math.hypot(o.x - x, o.y - y) < R) collect(o);
+}
+
+function wreck(n) {
+  burst(G.x, G.y, 0xff8a1f, 40, 200);
+  P.fi.emitParticleAt(G.x, G.y, n);
+  P.sm.emitParticleAt(G.x, G.y, 20);
+  P.sp.emitParticleAt(G.x, G.y, 30);
+  P.rg.emitParticleAt(G.x, G.y, 1);
+  tone(400, 0.9, 'sawtooth', 0.2, 40);
 }
 
 function hurt() {
@@ -1058,20 +1194,24 @@ function hurt() {
   G.inv = 1.6;
   G.cb = 0;
   G.hd = 1;
-  sc.cameras.main.shake(300, 0.02);
-  sc.cameras.main.flash(200, 255, 60, 60);
+  shk(300, 0.02);
+  fls(200, 255, 60, 60);
   tone(180, 0.4, 'sawtooth', 0.22, 50);
   burst(G.x, G.y, 0xffc21a, 14, 90);
   burst(G.x, G.y, 0xb5773a, 16, 200);
   P.sp.emitParticleAt(G.x, G.y, 12);
-  if (G.hp <= 0) over();
+  if (G.hp > 0) return;
+  if (!two()) return over();
+  // En duelo, quedarte sin vidas te saca de la partida: conservas tus puntos y el rival sigue
+  wreck(60);
+  finish('¡HUNDIDO!', '#ff5a5a');
 }
 
 // --- Río: cochinos y caimanes ---
 
 function river(dt) {
   const play = G.ph === 'play';
-  const demo = G.ph === 'title' || G.ph === 'lore';
+  const demo = G.ph === 'demo';
   const fury = G.lv >= FURY;
   const MR = L.g ? 60 + 45 * L.g : 0;
 
@@ -1180,6 +1320,9 @@ function river(dt) {
 // --- Mejoras ---
 
 function levelUp() {
+  const w = G;
+  const ks = G.ks;
+  const mid = G.x0 + G.vw / 2;
   const pool = Phaser.Utils.Array.Shuffle(UP.filter((u) => L[u[0]] < u[3])).slice(0, 3);
   G.xp -= G.need;
   G.lv++;
@@ -1194,29 +1337,37 @@ function levelUp() {
   G.sel = pool.length > 1 ? 1 : 0;
 
   const o = (G.ov = sc.add.container(0, 0).setDepth(50));
-  const dark = sc.add.rectangle(400, 300, W, H, 0x061018, 0);
-  const sun = rays(sc.add.graphics({ x: 400, y: 280 }).setScale(0));
-  const fl = sc.add.rectangle(400, 300, W, H, 0xffffff, 0.9);
-  const tt = T(400, 280, '¡MEJORA!', 96, '#fff36b').setScale(6).setAlpha(0);
+  // En duelo todo el espectáculo se recorta a la mitad del jugador
+  if (G.mk) o.setMask(G.mk);
+  const dark = sc.add.rectangle(mid, 300, G.vw, H, 0x061018, 0);
+  const sun = rays(sc.add.graphics({ x: mid, y: 280 }).setScale(0));
+  const fl = sc.add.rectangle(mid, 300, G.vw, H, 0xffffff, 0.9);
+  const tt = T(mid, 280, '¡MEJORA!', 96, '#fff36b')
+    .setScale(6 * ks)
+    .setAlpha(0);
   o.add([dark, sun, fl, tt]);
+  // En duelo hay 5 segundos para elegir; si se acaban, sale una carta al azar
+  G.cn = two() ? T(mid, 500, '', 44, '#ffd23f') : 0;
+  if (G.cn) o.add(G.cn);
 
   sc.tweens.add({ targets: dark, fillAlpha: 0.82, duration: 300 });
   sc.tweens.add({ targets: fl, alpha: 0, duration: 350 });
   sc.tweens.add({ targets: sun, angle: 360, duration: 9000, repeat: -1 });
   sc.tweens.add({ targets: sun, scale: 1, duration: 500, ease: 'Back.easeOut' });
   sc.tweens.add({ targets: sun, alpha: 0.22, delay: 850, duration: 400 });
-  sc.tweens.add({ targets: tt, scale: 1, alpha: 1, duration: 320, ease: 'Back.easeOut' });
-  sc.tweens.add({ targets: tt, y: 96, scale: 0.55, delay: 850, duration: 350, ease: 'Cubic.easeInOut' });
-  sc.cameras.main.shake(260, 0.012);
+  sc.tweens.add({ targets: tt, scale: ks, alpha: 1, duration: 320, ease: 'Back.easeOut' });
+  sc.tweens.add({ targets: tt, y: 96, scale: 0.55 * ks, delay: 850, duration: 350, ease: 'Cubic.easeInOut' });
+  shk(260, 0.012);
   [523, 659, 784, 1047, 1319, 1568].forEach((f, i) => tone(f, 0.16, 'square', 0.09, 0, i * 0.07));
 
   // Lluvia de cochinos
   for (let i = 0; i < 28; i++) {
-    const p = sc.add.image(400, 280, 'pig').setTint(PC[i % 4 === 3 ? 2 : i % 2]).setDepth(51).setScale(0.3);
+    const p = sc.add.image(mid, 280, 'pig').setTint(PC[i % 4 === 3 ? 2 : i % 2]).setScale(0.3);
     const a = rnd(0, 6.28);
+    o.add(p);
     sc.tweens.add({
       targets: p,
-      x: 400 + Math.cos(a) * rnd(380, 560),
+      x: mid + Math.cos(a) * rnd(380, 560),
       y: 280 + Math.sin(a) * rnd(300, 460),
       angle: rnd(-540, 540),
       scale: rnd(1, 1.8),
@@ -1228,24 +1379,30 @@ function levelUp() {
 
   G.cf = sc.add
     .particles(0, 0, 'dot', {
-      x: { min: 0, max: W },
+      x: { min: G.x0, max: G.x0 + G.vw },
       y: -10,
       speedY: { min: 120, max: 300 },
-      speedX: { min: -40, max: 40 },
       lifespan: 3200,
-      frequency: 30,
+      frequency: 30 / ks,
       scale: { min: 0.8, max: 1.6 },
       tint: PC.concat(RC),
     })
     .setDepth(51);
-  sc.time.delayedCall(950, () => pool.forEach(card));
-  sc.time.delayedCall(1500 + pool.length * 140, () => (G.rdy = 1));
+  sc.time.delayedCall(950, () => {
+    use(w);
+    pool.forEach(card);
+  });
+  sc.time.delayedCall(1500 + pool.length * 140, () => {
+    w.rdy = 1;
+    w.le = w.T + 5;
+  });
 }
 
 function card(u, i, all) {
   const [k, nm, ds, mx, rar, ic, tint] = u;
   const col = RC[rar];
-  const c = sc.add.container(400 + (i - (all.length - 1) / 2) * 230, 780).setDepth(52);
+  const ks = G.ks;
+  const c = sc.add.container(CX + (i - (all.length - 1) / 2) * 230 * ks, 780).setDepth(52);
   const bg = sc.add.graphics();
   bg.fillStyle(0x12222e).fillRoundedRect(-100, -140, 200, 280, 14);
   bg.fillStyle(col, 0.28).fillRoundedRect(-100, -140, 200, 44, { tl: 14, tr: 14, bl: 0, br: 0 });
@@ -1262,30 +1419,42 @@ function card(u, i, all) {
     T(0, 70, Array.isArray(ds) ? ds[L[k]] : ds, 14, '#cfe8f2'),
     T(0, 118, 'NIVEL ' + (L[k] + 1) + '/' + mx, 14, css(col)),
   ]);
-  c.scaleX = 0;
+  c.setScale(0, ks);
+  if (G.mk) c.setMask(G.mk);
   G.cards.push(c);
-  sc.tweens.add({ targets: c, y: 335, scaleX: 1, duration: 480, delay: i * 140, ease: 'Back.easeOut' });
+  sc.tweens.add({ targets: c, y: 335, scaleX: ks, duration: 480, delay: i * 140, ease: 'Back.easeOut' });
   tone(880 + i * 220, 0.12, 'triangle', 0.12, 0, i * 0.14 + 0.2);
 }
 
 function lvl(time) {
   if (!G.rdy) return;
+  const p = G.P;
   const n = G.cards.length;
-  const d = (ax('R') ? 1 : 0) - (ax('L') ? 1 : 0);
+  const d = (hit[p + 'R'] ? 1 : 0) - (hit[p + 'L'] ? 1 : 0);
   if (d) {
     G.sel = (G.sel + d + n) % n;
     tone(700, 0.04, 'square', 0.06);
   }
   G.cards.forEach((c, i) => {
     const s = i === G.sel;
-    c.setScale(s ? 1.1 : 0.9).setAlpha(s ? 1 : 0.55);
+    c.setScale(G.ks * (s ? 1.1 : 0.9)).setAlpha(s ? 1 : 0.55);
     c.y = s ? 322 + Math.sin(time / 160) * 6 : 338;
     c.gl.setFillStyle(c.gl.fillColor, s ? 0.4 + 0.25 * Math.sin(time / 90) : 0);
   });
-  if (FB.some((b) => hit[b]) || hit.START1) pick();
+  if (G.cn) {
+    const left = G.le - G.T;
+    G.cn.setText(Math.ceil(left)).setScale(1 + (left % 1) * 0.3);
+    if (left <= 0) {
+      G.sel = (Math.random() * n) | 0;
+      return pick();
+    }
+  }
+  // Cada jugador confirma con cualquiera de sus seis botones
+  if ([1, 2, 3, 4, 5, 6].some((b) => hit[p + b])) pick();
 }
 
 function pick() {
+  const w = G;
   const s = G.cards[G.sel];
   const u = s.u;
   L[u[0]]++;
@@ -1295,15 +1464,16 @@ function pick() {
   G.cards.forEach((c, i) =>
     sc.tweens.add(
       c === s
-        ? { targets: c, scale: 1.7, alpha: 0, duration: 420, ease: 'Cubic.easeOut' }
+        ? { targets: c, scale: 1.7 * G.ks, alpha: 0, duration: 420, ease: 'Cubic.easeOut' }
         : { targets: c, y: 820, angle: i < G.sel ? -25 : 25, duration: 380, ease: 'Cubic.easeIn' },
     ),
   );
-  burst(s.x, s.y, RC[u[4]], 34, 220, 53);
-  sc.cameras.main.flash(180, 255, 255, 255);
+  burst(s.x, s.y, RC[u[4]], two() ? 14 : 34, 220, 53);
+  fls(180, 255, 255, 255);
   [784, 988, 1175].forEach((f) => tone(f, 0.3, 'triangle', 0.09));
   sc.tweens.add({ targets: G.ov, alpha: 0, duration: 420 });
   sc.time.delayedCall(440, () => {
+    use(w);
     sc.tweens.killTweensOf(G.ov.list);
     G.ov.destroy();
     G.cards.forEach((c) => c.destroy());
@@ -1323,22 +1493,23 @@ function pick() {
 
 // --- Fin de partida ---
 
-function over() {
+// Saca la excavadora del río del mundo activo
+function retire() {
   G.ph = 'over';
-  G.w = 1;
   ex.setVisible(false);
   raft.setVisible(false);
   gfx.clear();
   G.cl.forEach((c) => c.im.destroy());
   G.cl = [];
   G.pg.forEach((o) => (o.h = 0));
-  burst(G.x, G.y, 0xff8a1f, 40, 200);
-  P.fi.emitParticleAt(G.x, G.y, 60);
-  P.sm.emitParticleAt(G.x, G.y, 20);
-  P.sp.emitParticleAt(G.x, G.y, 30);
-  P.rg.emitParticleAt(G.x, G.y, 1);
-  tone(400, 0.9, 'sawtooth', 0.2, 40);
   hud();
+}
+
+function over() {
+  retire();
+  wreck(60);
+  GP = 'end';
+  G.w = 1;
 
   G.q = G.score > 0 && (best.length < 5 || G.score > best[best.length - 1].s);
   sc.add.rectangle(400, 300, W, H, 0x061018, 0.8).setDepth(50);
@@ -1359,6 +1530,35 @@ function over() {
   }
 }
 
+// Duelo: este jugador terminó (se le acabó el reloj o se hundió); cuando terminan los dos se anuncia al ganador
+function finish(msg, mc) {
+  retire();
+  sc.add.rectangle(G.x0 + G.vw / 2, 300, G.vw, H, 0x061018, 0.7).setDepth(50);
+  T(CX, 130, msg, 44, mc).setDepth(51);
+  T(CX, 180, G.score + ' puntos', 22).setDepth(51);
+  tone(880, 0.5, 'triangle', 0.14, 220);
+  if (WS.some((w) => w.ph !== 'over')) return;
+
+  const a = WS[0].score;
+  const b = WS[1].score;
+  const win = a === b ? -1 : a > b ? 0 : 1;
+  const col = win < 0 ? 0xffffff : WS[win].col;
+  GP = 'end';
+  WS[0].w = 1.5;
+  WS[0].q = 0;
+  sc.add.rectangle(400, 320, 600, 230, 0x061018, 0.94).setStrokeStyle(5, col).setDepth(60);
+  const t = T(400, 262, win < 0 ? '¡EMPATE!' : '¡GANA EL JUGADOR ' + (win + 1) + '!', 44, css(col)).setDepth(61);
+  T(240, 330, 'JUGADOR 1\n' + a, 26, css(WS[0].col)).setDepth(61);
+  T(560, 330, 'JUGADOR 2\n' + b, 26, css(WS[1].col)).setDepth(61);
+  T(400, 330, 'VS', 22).setDepth(61);
+  const s = T(400, 402, 'PRESIONA START', 22).setDepth(61);
+  sc.tweens.add({ targets: t, scale: 1.1, duration: 400, yoyo: true, repeat: -1, ease: 'Sine.easeInOut' });
+  sc.tweens.add({ targets: s, alpha: 0.2, duration: 500, yoyo: true, repeat: -1 });
+  P.cf.setParticleTint(col);
+  P.cf.emitParticleAt(400, 262, 60);
+  [523, 659, 784, 1047, 1319].forEach((f, i) => tone(f, 0.25, 'triangle', 0.12, 0, i * 0.1));
+}
+
 function drawName() {
   G.nt.setText(
     G.nm
@@ -1370,10 +1570,11 @@ function drawName() {
   );
 }
 
+// Devuelve true si reinició la escena
 function overInput(dt) {
   if ((G.w -= dt) > 0) return;
   if (!G.q) {
-    if (anyBtn()) sc.scene.restart();
+    if (anyBtn()) return restart(0), true;
     return;
   }
   const d = (ax('D') ? 1 : 0) - (ax('U') ? 1 : 0);
@@ -1390,8 +1591,7 @@ function overInput(dt) {
       store()
         .set(KEY, best)
         .catch(() => {});
-      sc.scene.restart();
-      return;
+      return restart(0), true;
     }
   }
   drawName();

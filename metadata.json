@@ -1,5 +1,5 @@
 {
   "game_name": "Cochinos del Orinoco",
-  "description": "Maneja una excavadora en gabarra, atrapa cochinos que bajan por el Orinoco y elige mejoras al azar para volverte imparable. ¡Ojo con los caimanes!",
-  "player_mode": "single_player"
+  "description": "Maneja una excavadora en gabarra, atrapa cochinos que bajan por el Orinoco y elige mejoras al azar para volverte imparable. Juega solo o en duelo a pantalla partida. ¡Ojo con los caimanes!",
+  "player_mode": "two_player"
 }
